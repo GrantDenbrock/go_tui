@@ -88,6 +88,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) View() string {
+	// match options case here and add functions/commands
 	if m.choice == "Run Python" {
 		runPython()
 		return ""
@@ -103,6 +104,7 @@ func (m model) View() string {
 }
 
 func main() {
+	// set options here
 	items := []list.Item{
 		item("Run GO"),
 		item("Run Python"),
