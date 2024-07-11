@@ -1,163 +1,146 @@
 package main
+
 import (
-  "os/exec"
-  "log"
-  "fmt"
-  "os"
-  tea "github.com/charmbracelet/bubbletea"
+	"fmt"
+	"io"
+	"log"
+	"os/exec"
+	"os"
+	"strings"
+
+	"github.com/charmbracelet/bubbles/list"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
+const listHeight = 14
 
-// basically there are 3 things I need to build: the Model, the View, and the Update
-// So the model, straight out of the example:
-// this defines a new type called model, that has 3 attributes. 
-type model struct {
-    choices  []string           // items on the to-do list
-    cursor   int                // which to-do list item our cursor is pointing at
-    selected map[int]struct{}   // which to-do items are selected
+var (
+	titleStyle        = lipgloss.NewStyle().MarginLeft(2)
+	itemStyle         = lipgloss.NewStyle().PaddingLeft(4)
+	selectedItemStyle = lipgloss.NewStyle().PaddingLeft(2).Foreground(lipgloss.Color("170"))
+	paginationStyle   = list.DefaultStyles().PaginationStyle.PaddingLeft(4)
+	helpStyle         = list.DefaultStyles().HelpStyle.PaddingLeft(4).PaddingBottom(1)
+	quitTextStyle     = lipgloss.NewStyle().Margin(1, 0, 2, 4)
+)
+
+type item string
+
+func (i item) FilterValue() string { return "" }
+
+type itemDelegate struct{}
+
+func (d itemDelegate) Height() int                             { return 1 }
+func (d itemDelegate) Spacing() int                            { return 0 }
+func (d itemDelegate) Update(_ tea.Msg, _ *list.Model) tea.Cmd { return nil }
+func (d itemDelegate) Render(w io.Writer, m list.Model, index int, listItem list.Item) {
+	i, ok := listItem.(item)
+	if !ok {
+		return
+	}
+
+	str := fmt.Sprintf("%d. %s", index+1, i)
+
+	fn := itemStyle.Render
+	if index == m.Index() {
+		fn = func(s ...string) string {
+			return selectedItemStyle.Render("> " + strings.Join(s, " "))
+		}
+	}
+
+	fmt.Fprint(w, fn(str))
 }
 
+type model struct {
+	list     list.Model
+	choice   string
+	quitting bool
+}
 
-// this is a method that just instantiates the initial state of the model. There are different ways to do this but this seems simple enough...
-func initialModel() model {
-	return model{
-		// Our to-do list is a grocery list
-		choices:  []string{"Run GO", "Run python", "Run Bash"},
+func (m model) Init() tea.Cmd {
+	return nil
+}
 
-		// A map which indicates which choices are selected. We're using
-		// the map like a mathematical set. The keys refer to the indexes
-		// of the `choices` slice, above.
-		selected: make(map[int]struct{}),
+func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.list.SetWidth(msg.Width)
+		return m, nil
+
+	case tea.KeyMsg:
+		switch keypress := msg.String(); keypress {
+		case "q", "ctrl+c":
+			m.quitting = true
+			return m, tea.Quit
+
+		case "enter":
+			i, ok := m.list.SelectedItem().(item)
+			if ok {
+				m.choice = string(i)
+			}
+			return m, tea.Quit
+		}
+	}
+
+	var cmd tea.Cmd
+	m.list, cmd = m.list.Update(msg)
+	return m, cmd
+}
+
+func (m model) View() string {
+	if m.choice == "Run Python" {
+		runPython()
+		return ""
+	}
+	if m.choice == "Run Bash" {
+		runBash()
+		return ""
+	}
+	if m.quitting {
+		return quitTextStyle.Render("No command? That’s cool.")
+	}
+	return "\n" + m.list.View()
+}
+
+func main() {
+	items := []list.Item{
+		item("Run GO"),
+		item("Run Python"),
+		item("Run Bash"),
+	}
+
+	const defaultWidth = 20
+
+	l := list.New(items, itemDelegate{}, defaultWidth, listHeight)
+	l.Title = "What do you want for dinner?"
+	l.SetShowStatusBar(false)
+	l.SetFilteringEnabled(false)
+	l.Styles.Title = titleStyle
+	l.Styles.PaginationStyle = paginationStyle
+	l.Styles.HelpStyle = helpStyle
+
+	m := model{list: l}
+
+	if _, err := tea.NewProgram(m).Run(); err != nil {
+		fmt.Println("Error running program:", err)
+		os.Exit(1)
 	}
 }
 
 
-// Init method is required. In our case we don't want it to do anything, but you could have it do some initial I/O or whatever. 
-func (m model) Init() tea.Cmd {
-    // Just return `nil`, which means "no I/O right now, please."
-    return nil
-}
-
-// Update method is required. This method gets called whenever a message is recieved. Right now this returns a updated model, however 
-// in a little bit this is where we are probably going to have it return a Cmd to go run one of the scripts...
-func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-    switch msg := msg.(type) {
-
-    // Is it a key press?
-    case tea.KeyMsg:
-
-        // Cool, what was the actual key pressed?
-        switch msg.String() {
-
-        // These keys should exit the program.
-        case "ctrl+c", "q":
-            return m, tea.Quit
-
-        // The "up" and "k" keys move the cursor up
-        case "up", "k":
-            if m.cursor > 0 {
-                m.cursor--
-            }
-
-        // The "down" and "j" keys move the cursor down
-        case "down", "j":
-            if m.cursor < len(m.choices)-1 {
-                m.cursor++
-            }
-
-        // The "enter" key and the spacebar (a literal space) toggle
-        // the selected state for the item that the cursor is pointing at.
-        case "enter", " ":
-            _, ok := m.selected[m.cursor]
-            if ok {
-                delete(m.selected, m.cursor)
-            } else {
-                m.selected[m.cursor] = struct{}{}
-            }
-        }
-    }
-
-    // Return the updated model to the Bubble Tea runtime for processing.
-    // Note that we're not returning a command.
-    return m, nil
-}
-
-// View method is required. This actually is what we end up using to render the UI. 
-// This is the cool part of BT, this is just a string but BT just draws it for ya and it looks nice.
-func (m model) View() string {
-    // The header
-    s := "What should we run?\n\n"
-
-    // Iterate over our choices
-    for i, choice := range m.choices {
-
-        // Is the cursor pointing at this choice?
-        cursor := " " // no cursor
-        if m.cursor == i {
-            cursor = ">" // cursor!
-        }
-
-        // Is this choice selected?
-        checked := " " // not selected
-        if _, ok := m.selected[i]; ok {
-            checked = "x" // selected!
-            // fmt.Printf("%s\n", choice)
-            if choice == "Run python" { 
-                runPython() 
-            }
-        }
-
-        // Render the row
-        s += fmt.Sprintf("%s [%s] %s\n", cursor, checked, choice)
-        
-    }
-
-    // The footer
-    s += "\nPress q to quit.\n"
-
-    // Send the UI for rendering
-    return s
-}
-
-
 func runPython() {
-  cmd, err := exec.Command("python", "hello.py").Output()
-  if err != nil {
-    log.Fatal(err)
+	cmd, err := exec.Command("python", "hello.py").Output()
+	if err != nil {
+	  log.Fatal(err)
+	}
+	fmt.Println(string(cmd))
+	return
   }
-  fmt.Println(string(cmd))
-  return 
-}
 
-
-func runBash() {
-  cmd, err := exec.Command("bash","hello.sh").Output()
-  if err != nil {
-    log.Fatal(err)
+  func runBash() {
+	cmd, err := exec.Command("bash","hello.sh").Output()
+	if err != nil {
+	  log.Fatal(err)
+	}
+	fmt.Println(string(cmd))
   }
-  fmt.Println(string(cmd))
-}
-
-
-func main() {
-    p := tea.NewProgram(initialModel())
-    if _, err := p.Run(); err != nil {
-        fmt.Printf("Alas, there's been an error: %v", err)
-        os.Exit(1)
-    }
-}
-
-
-//func main () {
-  //cmd, err := exec.Command("bash", "hello.sh").Output()
-  //if err != nil {
-   // log.Fatal(err)
-  //}
-  //fmt.Println(string(cmd))
-  
- // cmd2, err2 := exec.Command("python", "hello.py").Output()
-   // if err2 != nil {
-     // log.Fatal(err2)
- //   }
- // fmt.Println(string(cmd2))
-//}
